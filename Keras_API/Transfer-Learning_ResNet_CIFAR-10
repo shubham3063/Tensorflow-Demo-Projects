@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Jun 15 06:27:00 2019
+
+@author: shubhamtripathi
+"""
+#%%
+from keras.applications import resnet50
+from keras.applications.resnet50 import preprocess_input
+from keras.models import load_model, Model
+from keras.preprocessing.image import ImageDataGenerator
+from keras.layers import Dense, GlobalAveragePooling2D, Flatten, Dropout
+from keras.callbacks import ModelCheckpoint
+from keras.optimizers import Adam
+from PIL import Image
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+#%% flags
+flag_save_data = True
+flag_load_model = True
+
+#%% read cifar-10 dataset from directory
+# https://www.cs.toronto.edu/~kriz/cifar.html
+def unpickle(file):
+    import pickle
+    with open(file, 'rb') as fo:
+        dict_ = pickle.load(fo, encoding='bytes')
+    return dict_
+#batch_1 = unpickle('cifar-10-batches-py/data_batch_1')
+# read first 10 entries of batch_1
+#for (key,val) in batch_1.items():
+#    print('{0}:{1}'.format(key,val[:2]))
+
+#%% save the data as image in correct directory hierarchy
+def save_data(data_dir, sub_data_dir, batch):
+    sub_data_path = os.path.join(data_dir,sub_data_dir)
+    if not os.path.isdir(sub_data_path):
+        os.makedirs(sub_data_path)
+    
+    for j,img in enumerate(batch[b'data']):
+        img1 = []
+        base = 1024
+        for i in range(base):
+            img1.extend([img[i],img[i+base],img[i+base*2]])
+        img2 = np.resize(img1, (32,32,3))
+        # show image
+        # plt.imshow(img2)
+        class_dir = str(batch[b'labels'][j])
+        class_path = os.path.join(data_dir,sub_data_dir,class_dir)
+        if not os.path.isdir(class_path):
+            os.makedirs(class_path)
+        
+        img_name = batch[b'filenames'][j].decode('utf-8')
+        file_path = os.path.join(data_dir, sub_data_dir, class_dir, img_name)
+        img3 = Image.fromarray(img2)
+        img3.save(file_path)
+
+#%%  load training, validation and testing data and save in directories
+read_dir = 'cifar-10-batches-py'
+data_dir = 'cifar-10-data'
+if flag_save_data:
+    for i in range(1,7):
+        sub_data_dir = 'train'
+        batch_file_name = 'data_batch_' + str(i)
+        if i == 5:
+            sub_data_dir = 'valid'
+        if i == 6:
+            sub_data_dir = 'test'
+            batch_file_name = 'test_batch'
+        batch = unpickle(os.path.join(read_dir, batch_file_name))
+        save_data(data_dir, sub_data_dir, batch)
+
+
+#%% create image data generator
+img_data_generator = ImageDataGenerator(#rescale = 1./255.0, (this is the issue, dont rescale only resize later)
+                                        preprocessing_function=preprocess_input)
+train_dir = 'train'
+valid_dir = 'valid'
+test_dir  = 'test'
+train_path = os.path.join(data_dir,train_dir)
+valid_path = os.path.join(data_dir,valid_dir)
+test_path = os.path.join(data_dir,test_dir)
+
+batch_size = 32
+
+train_gen = img_data_generator.flow_from_directory(train_path, 
+                                                   target_size=(200,200), 
+                                                   batch_size=batch_size, 
+                                                   class_mode='categorical')
+valid_gen = img_data_generator.flow_from_directory(valid_path, 
+                                                   target_size=(200,200), 
+                                                   batch_size=batch_size, 
+                                                   class_mode='categorical')
+test_gen = img_data_generator.flow_from_directory(test_path, 
+                                                   target_size=(200,200), 
+                                                   batch_size=batch_size, 
+                                                   class_mode='categorical')
+
+#%% load ResNet50 saved model
+
+#%% fetch model from internet
+if flag_load_model:
+    base_model_file_name = 'ResNet50_model_features.h5'
+    if not os.path.exists(base_model_file_name):
+        base_model = resnet50.ResNet50(input_shape=(200,200,3), weights='imagenet',include_top=False)
+        # save model locally
+        base_model.save(base_model_file_name)
+    else:
+        base_model = load_model(base_model_file_name)
+
+##%% delete model
+#del base_model
+
+#%% add fully connected layers
+# source: https://keras.io/applications/
+x = base_model.output
+#x = GlobalAveragePooling2D()(x)
+x = Flatten()(x)
+x = Dropout(0.3)(x)
+x = Dense(1024, activation='relu')(x)
+x = Dropout(0.3)(x)
+predictions = Dense(10, activation='softmax')(x)
+model = Model(inputs=base_model.input, outputs=predictions)
+for layer in base_model.layers:
+    layer.trainable = False
+#%%
+adam_optm = Adam(lr=0.0001)
+model.compile(optimizer=adam_optm,loss='categorical_crossentropy',metrics=['accuracy'])
+#%%
+num_train_samples = train_gen.n
+num_valid_samples = valid_gen.n
+num_test_samples  = test_gen.n
+
+factor = 100
+checkpointer = ModelCheckpoint(filepath='weights.hdf5', verbose=1, save_best_only=True)
+model.fit_generator(train_gen, 
+                    steps_per_epoch=num_train_samples//(batch_size*factor), 
+                    epochs=5, 
+                    shuffle=True, 
+                    callbacks=[checkpointer],
+                    validation_data=valid_gen,
+                    validation_steps=num_valid_samples//(batch_size*factor))
+"""
+result:
+>> runfile('/Users/shubhamtripathi/Documents/DL/classify_cifar10_resnet50.py', wdir='/Users/shubhamtripathi/Documents/DL')
+Found 40000 images belonging to 10 classes.
+Found 10000 images belonging to 10 classes.
+Found 10000 images belonging to 10 classes.
+Epoch 1/5
+12/12 [==============================] - 55s 5s/step - loss: 4.0222 - acc: 0.3385 - val_loss: 3.9254 - val_acc: 0.3854
+
+Epoch 00001: val_loss improved from inf to 3.92544, saving model to weights.hdf5
+Epoch 2/5
+12/12 [==============================] - 47s 4s/step - loss: 3.1870 - acc: 0.4974 - val_loss: 3.8611 - val_acc: 0.3958
+
+Epoch 00002: val_loss improved from 3.92544 to 3.86110, saving model to weights.hdf5
+Epoch 3/5
+12/12 [==============================] - 47s 4s/step - loss: 2.1754 - acc: 0.5964 - val_loss: 2.5078 - val_acc: 0.4896
+
+Epoch 00003: val_loss improved from 3.86110 to 2.50778, saving model to weights.hdf5
+Epoch 4/5
+12/12 [==============================] - 48s 4s/step - loss: 1.8637 - acc: 0.6302 - val_loss: 3.1602 - val_acc: 0.4062
+
+Epoch 00004: val_loss did not improve from 2.50778
+Epoch 5/5
+12/12 [==============================] - 49s 4s/step - loss: 1.2720 - acc: 0.6875 - val_loss: 1.9438 - val_acc: 0.5625
+
+Epoch 00005: val_loss improved from 2.50778 to 1.94383, saving model to weights.hdf5
+"""
+#%%
+model.evaluate_generator(test_gen, steps=100)
+# result: [2.058572527170181, 0.5228125]
