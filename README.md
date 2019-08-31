@@ -1,5 +1,5 @@
 # Tensorflow demo projects
-Solutions to common problems using Tensorflow Low Level and Keras API. <br> <br>
+Demo projects using Tensorflow Low Level and Keras API. <br> <br>
 Current demos include:
  * Keras_API/Fashion_MNIST.ipynb
  * Keras_API/Fashion_MNIST_CNN.ipynb
